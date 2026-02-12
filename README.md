@@ -55,7 +55,7 @@ docker build --build-arg OBSIDIAN_VERSION=1.12.1 -t obsidian-headless .
 
 ## Part of OBaaS
 
-This image is a component of [OBaaS (Obsidian-as-a-Service)](https://github.com/cameronsjo/obaas) — a pattern for running Obsidian on a server to unlock AI agent access, encrypted backup, and multi-device sync.
+This image is a component of [OBaaSS (Obsidian As-a Safe-ish Service)](https://github.com/cameronsjo/obaass) — a pattern for running Obsidian on a server to unlock AI agent access, encrypted backup, and multi-device sync.
 
 ## License
 
