@@ -1,21 +1,29 @@
 # Third-Party Notices
 
-## Obsidian
+## obsidian-headless
 
-This project downloads and runs [Obsidian](https://obsidian.md) at Docker
-build time. Obsidian is proprietary software with its own license terms:
+This project uses [`obsidian-headless`](https://www.npmjs.com/package/obsidian-headless),
+an official npm package by [Dynalist Inc.](https://obsidian.md) (the makers of Obsidian).
 
-- **Personal use:** Free
-- **Commercial use:** Requires a [commercial license](https://obsidian.md/pricing) from Obsidian
-- **EULA:** <https://obsidian.md/eula>
+- **License:** UNLICENSED (proprietary)
+- **npm:** <https://www.npmjs.com/package/obsidian-headless>
+- **GitHub:** <https://github.com/obsidianmd/obsidian-headless>
+- **Requires:** Active [Obsidian Sync](https://obsidian.md/sync) subscription
+
+The `obsidian-headless` package's own license terms apply to its binaries
+contained in built Docker images.
+
+## Node.js
+
+The Docker image is based on [`node:22-alpine`](https://hub.docker.com/_/node),
+which includes Node.js under the [MIT License](https://github.com/nodejs/node/blob/main/LICENSE)
+and Alpine Linux packages under their respective open source licenses.
+
+## Container Utilities
+
+- **tini** — [MIT License](https://github.com/krallin/tini/blob/master/LICENSE)
+- **su-exec** — [MIT License](https://github.com/ncopa/su-exec/blob/master/LICENSE)
 
 The PolyForm Noncommercial license in this repository covers only the
 Dockerfile, entrypoint script, CI configuration, and documentation — NOT
-the Obsidian application itself. Obsidian's own license terms apply to
-the Obsidian binaries contained in built Docker images.
-
-## System Dependencies
-
-The Docker image includes system libraries from Debian (bookworm-slim)
-under their respective open source licenses (GPL, LGPL, MIT, BSD, X11).
-These are runtime dependencies and are not relicensed by this project.
+the obsidian-headless package or Node.js runtime.

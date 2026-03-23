@@ -1,44 +1,85 @@
 # obsidi-headless
 
-Minimal headless Obsidian container. Xvfb + the Obsidian desktop app — no VNC, no desktop environment, no GUI overhead.
-
-Designed for server-side use where you need Obsidian running (for Sync, plugins, or CLI access) without anyone sitting at a screen.
+Headless Obsidian Sync container powered by the official [`obsidian-headless`](https://github.com/obsidianmd/obsidian-headless) npm package. Keeps a vault continuously synced on a server without the desktop app.
 
 ## Quick Start
 
 ```bash
 docker run -d \
-  --name obsidian \
+  --name obsidian-sync \
   -v obsidian-config:/config \
+  -v /path/to/vault:/vault \
+  ghcr.io/cameronsjo/obsidi-headless:latest
+```
+
+## First-Run Setup
+
+The container needs Obsidian Sync credentials configured once before continuous sync works.
+
+### 1. Log in
+
+```bash
+docker run -it --rm \
+  -v obsidian-config:/config \
+  ghcr.io/cameronsjo/obsidi-headless:latest \
+  su-exec 99:100 ob login
+```
+
+### 2. Set up sync
+
+```bash
+# List available remote vaults
+docker run -it --rm \
+  -v obsidian-config:/config \
+  ghcr.io/cameronsjo/obsidi-headless:latest \
+  su-exec 99:100 ob sync-list-remote
+
+# Connect to a vault
+docker run -it --rm \
+  -v obsidian-config:/config \
+  -v /path/to/vault:/vault \
+  ghcr.io/cameronsjo/obsidi-headless:latest \
+  su-exec 99:100 ob sync-setup --vault "Your Vault Name" --path /vault
+```
+
+### 3. Run
+
+```bash
+docker run -d \
+  --name obsidian-sync \
+  -v obsidian-config:/config \
+  -v /path/to/vault:/vault \
   ghcr.io/cameronsjo/obsidi-headless:latest
 ```
 
 ## What's Inside
 
-- **Obsidian** AppImage extracted and ready to run
-- **Xvfb** virtual framebuffer (Electron needs a display, even headless)
-- **Graceful shutdown** via SIGTERM handling
-- **Healthcheck** via Obsidian CLI
+- **[obsidian-headless](https://www.npmjs.com/package/obsidian-headless)** — official Obsidian CLI for Sync and Publish
+- **tini** — proper PID 1 for signal handling
+- **su-exec** — privilege drop after volume permission fix
 
-## What's NOT Inside
+## What Changed (v2.0)
 
-- No VNC server
-- No desktop environment
-- No web UI
-- No window manager
+| | v1 (Electron) | v2 (obsidian-headless) |
+|---|---|---|
+| Base | Debian + Xvfb + AppImage | Node.js 22 Alpine |
+| Image size | ~400MB | ~180MB |
+| Dependencies | 20+ Electron libs | tini + su-exec |
+| Startup | Boot X server, launch Electron, poll CLI | `ob sync --continuous` |
+| License | Catalyst required | Sync subscription only |
 
 ## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `TZ` | `UTC` | Container timezone |
-| `DISPLAY` | `:99` | X display (managed by entrypoint) |
 
 ### Volumes
 
 | Path | Purpose |
 |------|---------|
-| `/config` | Obsidian config, plugins, and vault data. `HOME` is set to this path |
+| `/config` | obsidian-headless state (credentials, sync metadata) |
+| `/vault` | Your Obsidian vault |
 
 ### User
 
@@ -49,8 +90,8 @@ Runs as UID `99` / GID `100` (matches Unraid's `nobody:users`). Override with `-
 ```bash
 docker build -t obsidi-headless .
 
-# Specific Obsidian version
-docker build --build-arg OBSIDIAN_VERSION=1.12.1 -t obsidi-headless .
+# Pin obsidian-headless version
+docker build --build-arg OBSIDIAN_HEADLESS_VERSION=0.0.8 -t obsidi-headless .
 ```
 
 ## Part of OBaaS
@@ -61,4 +102,4 @@ This image is a component of [OBaaSS (Obsidian As-a Safe-ish Service)](https://g
 
 [PolyForm Noncommercial 1.0.0](LICENSE). Commercial use requires a separate license — [get in touch](https://github.com/cameronsjo).
 
-Obsidian itself is proprietary software with its own [EULA](https://obsidian.md/eula). See [NOTICE.md](NOTICE.md) for details.
+Obsidian Sync requires an active [Obsidian Sync subscription](https://obsidian.md/sync). The `obsidian-headless` npm package is maintained by [Obsidian](https://obsidian.md) — see [NOTICE.md](NOTICE.md).
