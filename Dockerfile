@@ -23,7 +23,8 @@ RUN chmod +x /entrypoint.sh
 
 COPY --chown=99:100 LICENSE NOTICE.md /licenses/
 
-ENV TZ=UTC
+ENV TZ=UTC \
+    HOME=/config
 
 VOLUME ["/vault", "/config"]
 
