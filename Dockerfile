@@ -1,59 +1,33 @@
-FROM debian:bookworm-slim
+FROM node:22-alpine
 
-ARG OBSIDIAN_VERSION=1.8.9
+ARG OBSIDIAN_HEADLESS_VERSION=0.0.8
 
-# Minimal Electron dependencies + Xvfb for headless display
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    xvfb \
-    libgtk-3-0 \
-    libnss3 \
-    libgbm1 \
-    libxss1 \
-    libasound2 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxrandr2 \
-    libatk-bridge2.0-0 \
-    libdrm2 \
-    libxkbcommon0 \
-    libpango-1.0-0 \
-    libcairo2 \
-    libcups2 \
-    libdbus-1-3 \
-    libexpat1 \
-    libfontconfig1 \
-    libx11-xcb1 \
-    libxcb1 \
-    libxext6 \
-    libxfixes3 \
-    libxi6 \
-    libxrender1 \
-    libxtst6 \
-    wget \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+LABEL org.opencontainers.image.source="https://github.com/cameronsjo/obsidi-headless" \
+      org.opencontainers.image.description="Headless Obsidian Sync via obsidian-headless npm package" \
+      org.opencontainers.image.licenses="PolyForm-Noncommercial-1.0.0"
 
-# Download and extract Obsidian AppImage
-RUN wget -q "https://github.com/obsidianmd/obsidian-releases/releases/download/v${OBSIDIAN_VERSION}/Obsidian-${OBSIDIAN_VERSION}.AppImage" \
-        -O /tmp/obsidian.AppImage \
-    && chmod +x /tmp/obsidian.AppImage \
-    && cd /tmp && /tmp/obsidian.AppImage --appimage-extract \
-    && mv /tmp/squashfs-root /opt/obsidian \
-    && rm /tmp/obsidian.AppImage \
-    && chmod -R a+rx /opt/obsidian
+# Create user matching Unraid nobody:users (UID 99, GID 100)
+# node:22-alpine ships with 'node' at UID 1000 — remove it first
+RUN deluser --remove-home node 2>/dev/null || true && \
+    addgroup -g 100 -S users 2>/dev/null || true && \
+    adduser -u 99 -G users -S -D -h /config obsidian && \
+    mkdir -p /vault /config && \
+    chown -R 99:100 /vault /config
 
-# Create config directory and set up non-root user (UID 99 = Unraid nobody)
-RUN mkdir -p /config && chown 99:100 /config
+RUN apk add --no-cache tini su-exec && \
+    npm install -g obsidian-headless@${OBSIDIAN_HEADLESS_VERSION} && \
+    npm cache clean --force
 
-USER 99:100
-
-ENV HOME=/config
-ENV DISPLAY=:99
+COPY --chown=99:100 entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 COPY --chown=99:100 LICENSE NOTICE.md /licenses/
-COPY --chown=99:100 entrypoint.sh /entrypoint.sh
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
-    CMD /opt/obsidian/obsidian version > /dev/null 2>&1 || exit 1
+ENV TZ=UTC
+
+VOLUME ["/vault", "/config"]
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD pgrep -f "ob sync" > /dev/null 2>&1 || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
