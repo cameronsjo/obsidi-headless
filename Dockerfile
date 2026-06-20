@@ -16,7 +16,10 @@ RUN deluser --remove-home node 2>/dev/null || true && \
 
 RUN apk add --no-cache tini su-exec && \
     npm install -g obsidian-headless@${OBSIDIAN_HEADLESS_VERSION} && \
-    npm cache clean --force
+    npm cache clean --force && \
+    # Pre-create the runtime state directory; Docker tmpfs mounts overlay this
+    # at container start, so the image-level dir is mostly a documentation aid.
+    mkdir -p /run/obsidi && chown 99:100 /run/obsidi
 
 COPY --chown=99:100 entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
@@ -28,7 +31,10 @@ ENV TZ=UTC \
 
 VOLUME ["/vault", "/config"]
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD pgrep -f "ob sync" > /dev/null 2>&1 || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD test ! -f /run/obsidi/unconfigured \
+     && pgrep -f "ob sync" >/dev/null 2>&1 \
+     && test "$(($(date +%s) - $(stat -c %Y /run/obsidi/heartbeat 2>/dev/null || echo 0)))" -lt 300 \
+     || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]

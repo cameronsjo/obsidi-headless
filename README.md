@@ -81,9 +81,38 @@ docker run -d \
 | `/config` | obsidian-headless state (credentials, sync metadata) |
 | `/vault` | Your Obsidian vault |
 
+Mount `/run/obsidi` as a `tmpfs` for best practice (it holds only ephemeral state):
+
+```yaml
+tmpfs:
+  - /run/obsidi:uid=99,gid=100,mode=755
+```
+
+### Runtime State (`/run/obsidi`)
+
+The container writes liveness state to `/run/obsidi/` (tmpfs — gone on container stop by design).
+
+| File | Purpose |
+|------|---------|
+| `/run/obsidi/heartbeat` | Touched on every stdout line from `ob sync` and every 60s by the poller. The HEALTHCHECK requires mtime ≤ 5 min old. |
+| `/run/obsidi/heartbeat.json` | JSON snapshot: `{"ts":"...", "state":"syncing", "remote_vault":"..."}`. Updated every 60s by a background `ob sync-status` call. |
+| `/run/obsidi/unconfigured` | Sentinel created when `/vault` has no sync configuration. Presence makes the HEALTHCHECK report `unhealthy` immediately. |
+
+External monitors (Gatus, etc.) can check `docker inspect --format '{{.State.Health.Status}}'` or read `heartbeat.json` via a sidecar.
+
 ### User
 
 Runs as UID `99` / GID `100` (matches Unraid's `nobody:users`). Override with `--user` if needed.
+
+### Fail-Loud Behavior
+
+If `/vault` is not configured for Obsidian Sync (i.e., `ob sync-setup` was never run), the container:
+
+1. Emits a structured JSON fatal log identifying the problem and the fix.
+2. Creates `/run/obsidi/unconfigured` so the HEALTHCHECK reports `unhealthy`.
+3. Sleeps 30 seconds to rate-limit the crashloop before exiting with code **78** (EX_CONFIG).
+
+This replaces the previous silent millisecond crashloop (108,683 restarts in production before discovery).
 
 ## Building
 
