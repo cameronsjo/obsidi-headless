@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.0](https://github.com/cameronsjo/obsidi-headless/compare/v2.0.0...v2.1.0) (2026-06-20)
+
+
+### Features
+
+* add fail-loud preflight, heartbeat supervisor, and improved healthcheck ([#4](https://github.com/cameronsjo/obsidi-headless/issues/4)) ([8d1c1a1](https://github.com/cameronsjo/obsidi-headless/commit/8d1c1a193dd20fd99d9b5fb3d60b2b010cc91dc3))
+
 ## [2.0.0](https://github.com/cameronsjo/obsidi-headless/compare/v1.0.0...v2.0.0) (2026-03-23)
 
 
