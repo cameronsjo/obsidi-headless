@@ -80,6 +80,9 @@ positive_int() {
 STALL_SECONDS=$(positive_int OBSIDI_STALL_SECONDS "${OBSIDI_STALL_SECONDS:-900}" 900)
 WATCHDOG_INTERVAL=$(positive_int OBSIDI_WATCHDOG_INTERVAL "${OBSIDI_WATCHDOG_INTERVAL:-60}" 60)
 POLL_INTERVAL=$(positive_int OBSIDI_POLL_INTERVAL "${OBSIDI_POLL_INTERVAL:-60}" 60)
+STARTUP_GRACE=$(positive_int OBSIDI_STARTUP_GRACE "${OBSIDI_STARTUP_GRACE:-1800}" 1800)
+KILL_GRACE=$(positive_int OBSIDI_KILL_GRACE "${OBSIDI_KILL_GRACE:-30}" 30)
+START_TS=$(date +%s)
 
 # Write an initial heartbeat so the healthcheck start-period doesn't see a
 # missing file and immediately fail.
@@ -114,6 +117,10 @@ POLLER_PID=$!
 # stdout is piped through a reader that updates the heartbeat file on any line.
 # We use a named pipe so exec semantics are preserved for signal handling.
 SYNC_PIPE="$OBSIDI_RUN/sync.pipe"
+# A restart (docker start) can reuse a run dir that is not tmpfs: clear the
+# previous run's pipe and stall marker so mkfifo cannot fail and the stale
+# marker cannot taint this run.
+rm -f "$SYNC_PIPE" "$STALLED"
 mkfifo "$SYNC_PIPE"
 chown 99:100 "$SYNC_PIPE"
 
@@ -136,8 +143,10 @@ READER_PID=$!
 su-exec 99:100 tini -- sh -c 'exec ob sync --continuous --path "$1" > '"$SYNC_PIPE"' 2>&1' sh "$OBSIDI_VAULT" &
 SYNC_PID=$!
 
-# Stall watchdog: kill the sync process when the reader has not stamped the
-# heartbeat for STALL_SECONDS. The initial touch above is the grace period.
+# Stall watchdog: stop the sync process when the reader has not stamped the
+# heartbeat for STALL_SECONDS. It never acts before STARTUP_GRACE seconds after
+# start (a first full sync can be quiet). It sends SIGTERM, then SIGKILL after
+# KILL_GRACE seconds if the process is still alive.
 file_mtime() {
     stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0
 }
@@ -145,10 +154,20 @@ stall_watchdog() {
     while true; do
         sleep "$WATCHDOG_INTERVAL"
         age=$(( $(date +%s) - $(file_mtime "$HEARTBEAT") ))
-        if [ "$age" -gt "$STALL_SECONDS" ]; then
+        up=$(( $(date +%s) - START_TS ))
+        if [ "$age" -gt "$STALL_SECONDS" ] && [ "$up" -gt "$STARTUP_GRACE" ]; then
             log fatal "obsidi: no output from ob sync for ${age}s (limit ${STALL_SECONDS}s); exiting so the container restarts"
             touch "$STALLED"
             kill "$SYNC_PID" 2>/dev/null || true
+            waited=0
+            while kill -0 "$SYNC_PID" 2>/dev/null && [ "$waited" -lt "$KILL_GRACE" ]; do
+                sleep 1
+                waited=$((waited + 1))
+            done
+            if kill -0 "$SYNC_PID" 2>/dev/null; then
+                log fatal "obsidi: ob sync ignored SIGTERM for ${KILL_GRACE}s; sending SIGKILL"
+                kill -KILL "$SYNC_PID" 2>/dev/null || true
+            fi
             return 0
         fi
     done
@@ -167,8 +186,10 @@ cleanup() {
 trap cleanup INT TERM
 
 # Wait for the sync process; propagate its exit code.
-wait "$SYNC_PID"
-EXIT_CODE=$?
+# `|| EXIT_CODE=$?` keeps `set -e` from aborting on a non-zero (killed) sync,
+# so the stall check and cleanup below always run.
+EXIT_CODE=0
+wait "$SYNC_PID" || EXIT_CODE=$?
 cleanup
 # A watchdog kill must exit non-zero whatever the killed process reported.
 if [ -f "$STALLED" ] && [ "$EXIT_CODE" -eq 0 ]; then

@@ -74,6 +74,8 @@ docker run -d \
 |----------|---------|-------------|
 | `TZ` | `UTC` | Container timezone |
 | `OBSIDI_STALL_SECONDS` | `900` | Seconds of silence from `ob sync` before the watchdog kills it and the container exits non-zero (a restart policy such as `unless-stopped` then restarts it). Must be a positive integer; anything else falls back to `900` with a log line. A healthy sync prints at least every 30s. |
+| `OBSIDI_STARTUP_GRACE` | `1800` | Seconds after container start during which the watchdog never fires, so a quiet first full sync is not killed. |
+| `OBSIDI_KILL_GRACE` | `30` | Seconds the watchdog waits after SIGTERM before sending SIGKILL to a hung `ob sync`. |
 
 ### Volumes
 

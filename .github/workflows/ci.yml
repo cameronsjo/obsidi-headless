@@ -35,9 +35,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Shellcheck
-        run: shellcheck entrypoint.sh tests/stall-watchdog.sh
+        run: shellcheck entrypoint.sh tests/*.sh
       - name: Stall watchdog test
         run: sh tests/stall-watchdog.sh
+      - name: Stall watchdog test in the real container
+        run: sh tests/docker-stall.sh
 
   build:
     runs-on: ubuntu-latest
