@@ -2,7 +2,11 @@
 set -eu
 
 # Runtime state directory (tmpfs — gone on container stop, that's intentional)
-OBSIDI_RUN=/run/obsidi
+# Paths are overridable so tests/stall-watchdog.sh can run the supervisor
+# against a fake `ob` in a temp dir; production uses the defaults.
+OBSIDI_RUN="${OBSIDI_RUN:-/run/obsidi}"
+OBSIDI_VAULT="${OBSIDI_VAULT:-/vault}"
+OBSIDI_CONFIG="${OBSIDI_CONFIG:-/config}"
 mkdir -p "$OBSIDI_RUN"
 chown 99:100 "$OBSIDI_RUN"
 
@@ -19,22 +23,22 @@ log info "obsidian-headless version: $(su-exec 99:100 ob --version 2>/dev/null |
 # ---------------------------------------------------------------------------
 # Preflight: fix volume permissions (entrypoint runs as root)
 # ---------------------------------------------------------------------------
-chown -R 99:100 /vault /config
+chown -R 99:100 "$OBSIDI_VAULT" "$OBSIDI_CONFIG"
 
 # ---------------------------------------------------------------------------
 # Preflight: verify /vault is configured for Obsidian Sync
 # ---------------------------------------------------------------------------
 # ob sync-status exits 0 when configured, 3 when unconfigured.
 # Run as the unprivileged user so it reads from the right $HOME (/config).
-if ! su-exec 99:100 ob sync-status --path /vault >/dev/null 2>&1; then
-    log fatal "No sync configuration found for /vault. Run 'ob sync-setup --path /vault' inside the container (see README First-Run Setup)."
+if ! su-exec 99:100 ob sync-status --path "$OBSIDI_VAULT" >/dev/null 2>&1; then
+    log fatal "No sync configuration found for $OBSIDI_VAULT. Run 'ob sync-setup --path /vault' inside the container (see README First-Run Setup)."
     touch "$OBSIDI_RUN/unconfigured"
     # Rate-limit the crashloop so logs stay readable; exit 78 = EX_CONFIG
     sleep 30
     exit 78
 fi
 
-log info "Sync configuration verified for /vault"
+log info "Sync configuration verified for $OBSIDI_VAULT"
 
 # ---------------------------------------------------------------------------
 # Heartbeat supervisor
@@ -45,19 +49,40 @@ log info "Sync configuration verified for /vault"
 # Strategy:
 #   1. Run ob sync --continuous, capturing stdout to a pipe.
 #   2. A background reader tees output to the terminal AND updates
-#      /run/obsidi/heartbeat on any meaningful output line.
+#      /run/obsidi/heartbeat on every output line. Nothing else touches it.
 #   3. A background 60s poller calls ob sync-status and writes JSON to
-#      /run/obsidi/heartbeat.json.
+#      /run/obsidi/heartbeat.json. It does NOT touch the heartbeat file: a
+#      poller that did would mask a hung sync (ob sync-status prints only
+#      static config, never connection state).
+#   4. A stall watchdog checks the heartbeat age every 60s. Past
+#      OBSIDI_STALL_SECONDS (default 900) it kills the sync process, the
+#      script exits non-zero, and the restart policy brings the container back.
 #
-# The heartbeat reflects server-contact freshness, not file-change activity.
-# ob sync --continuous emits output whenever it contacts the remote (keepalive,
-# file events, reconnects) so any stdout is a reasonable liveness proxy.
-# If obsidian-headless ever goes silent during a healthy long idle, the 60s
-# poller provides a fallback heartbeat via sync-status.
+# A healthy ob sync --continuous prints a line at least every 30s, so silence
+# means a stall. The HEALTHCHECK (300s) reports unhealthy in the window before
+# the watchdog fires.
 # ---------------------------------------------------------------------------
 
 HEARTBEAT="$OBSIDI_RUN/heartbeat"
 HEARTBEAT_JSON="$OBSIDI_RUN/heartbeat.json"
+STALLED="$OBSIDI_RUN/stalled"
+
+# Positive-integer env knob with a logged fallback.
+positive_int() {
+    name="$1"; value="$2"; default="$3"
+    case "$value" in
+        ''|*[!0-9]*|0*)
+            log warn "$name='$value' is not a positive integer; using $default" >&2
+            echo "$default" ;;
+        *) echo "$value" ;;
+    esac
+}
+STALL_SECONDS=$(positive_int OBSIDI_STALL_SECONDS "${OBSIDI_STALL_SECONDS:-900}" 900)
+WATCHDOG_INTERVAL=$(positive_int OBSIDI_WATCHDOG_INTERVAL "${OBSIDI_WATCHDOG_INTERVAL:-60}" 60)
+POLL_INTERVAL=$(positive_int OBSIDI_POLL_INTERVAL "${OBSIDI_POLL_INTERVAL:-60}" 60)
+STARTUP_GRACE=$(positive_int OBSIDI_STARTUP_GRACE "${OBSIDI_STARTUP_GRACE:-1800}" 1800)
+KILL_GRACE=$(positive_int OBSIDI_KILL_GRACE "${OBSIDI_KILL_GRACE:-30}" 30)
+START_TS=$(date +%s)
 
 # Write an initial heartbeat so the healthcheck start-period doesn't see a
 # missing file and immediately fail.
@@ -65,7 +90,7 @@ touch "$HEARTBEAT"
 chown 99:100 "$HEARTBEAT"
 
 write_heartbeat_json() {
-    status_out=$(su-exec 99:100 ob sync-status --path /vault 2>&1 || true)
+    status_out=$(su-exec 99:100 ob sync-status --path "$OBSIDI_VAULT" 2>&1 || true)
     # Extract "Vault:" line for a display name; fall back to path if absent
     remote_vault=$(printf '%s' "$status_out" | grep -m1 'Vault:' | sed 's/.*Vault: //' | tr -d '[:space:]' || echo 'unknown')
     printf '{"ts":"%s","state":"syncing","remote_vault":"%s"}\n' \
@@ -80,8 +105,7 @@ write_heartbeat_json
 # Runs as root so it can write to /run/obsidi; su-exec is used for the ob call.
 heartbeat_poller() {
     while true; do
-        sleep 60
-        touch "$HEARTBEAT"
+        sleep "$POLL_INTERVAL"
         write_heartbeat_json
     done
 }
@@ -93,6 +117,10 @@ POLLER_PID=$!
 # stdout is piped through a reader that updates the heartbeat file on any line.
 # We use a named pipe so exec semantics are preserved for signal handling.
 SYNC_PIPE="$OBSIDI_RUN/sync.pipe"
+# A restart (docker start) can reuse a run dir that is not tmpfs: clear the
+# previous run's pipe and stall marker so mkfifo cannot fail and the stale
+# marker cannot taint this run.
+rm -f "$SYNC_PIPE" "$STALLED"
 mkfifo "$SYNC_PIPE"
 chown 99:100 "$SYNC_PIPE"
 
@@ -111,20 +139,60 @@ READER_PID=$!
 # We do NOT exec here so the shell stays alive to run the cleanup trap.
 # tini is launched as a child; Docker sends SIGTERM to PID 1 (this shell),
 # which the trap converts into a clean shutdown of all children.
-su-exec 99:100 tini -- sh -c 'ob sync --continuous --path /vault > '"$SYNC_PIPE"' 2>&1' &
+# shellcheck disable=SC2016  # $1 must expand in the inner shell, not here
+su-exec 99:100 tini -- sh -c 'exec ob sync --continuous --path "$1" > '"$SYNC_PIPE"' 2>&1' sh "$OBSIDI_VAULT" &
 SYNC_PID=$!
+
+# Stall watchdog: stop the sync process when the reader has not stamped the
+# heartbeat for STALL_SECONDS. It never acts before STARTUP_GRACE seconds after
+# start (a first full sync can be quiet). It sends SIGTERM, then SIGKILL after
+# KILL_GRACE seconds if the process is still alive.
+file_mtime() {
+    stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0
+}
+stall_watchdog() {
+    while true; do
+        sleep "$WATCHDOG_INTERVAL"
+        age=$(( $(date +%s) - $(file_mtime "$HEARTBEAT") ))
+        up=$(( $(date +%s) - START_TS ))
+        if [ "$age" -gt "$STALL_SECONDS" ] && [ "$up" -gt "$STARTUP_GRACE" ]; then
+            log fatal "obsidi: no output from ob sync for ${age}s (limit ${STALL_SECONDS}s); exiting so the container restarts"
+            touch "$STALLED"
+            kill "$SYNC_PID" 2>/dev/null || true
+            waited=0
+            while kill -0 "$SYNC_PID" 2>/dev/null && [ "$waited" -lt "$KILL_GRACE" ]; do
+                sleep 1
+                waited=$((waited + 1))
+            done
+            if kill -0 "$SYNC_PID" 2>/dev/null; then
+                log fatal "obsidi: ob sync ignored SIGTERM for ${KILL_GRACE}s; sending SIGKILL"
+                kill -KILL "$SYNC_PID" 2>/dev/null || true
+            fi
+            return 0
+        fi
+    done
+}
+stall_watchdog &
+WATCHDOG_PID=$!
 
 # Trap signals so we clean up background jobs when Docker sends SIGTERM/SIGINT.
 cleanup() {
     kill "$SYNC_PID" 2>/dev/null || true
     kill "$POLLER_PID" 2>/dev/null || true
+    kill "$WATCHDOG_PID" 2>/dev/null || true
     kill "$READER_PID" 2>/dev/null || true
     rm -f "$SYNC_PIPE"
 }
 trap cleanup INT TERM
 
 # Wait for the sync process; propagate its exit code.
-wait "$SYNC_PID"
-EXIT_CODE=$?
+# `|| EXIT_CODE=$?` keeps `set -e` from aborting on a non-zero (killed) sync,
+# so the stall check and cleanup below always run.
+EXIT_CODE=0
+wait "$SYNC_PID" || EXIT_CODE=$?
 cleanup
+# A watchdog kill must exit non-zero whatever the killed process reported.
+if [ -f "$STALLED" ] && [ "$EXIT_CODE" -eq 0 ]; then
+    EXIT_CODE=1
+fi
 exit "$EXIT_CODE"

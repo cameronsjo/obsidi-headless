@@ -73,6 +73,9 @@ docker run -d \
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `TZ` | `UTC` | Container timezone |
+| `OBSIDI_STALL_SECONDS` | `900` | Seconds of silence from `ob sync` before the watchdog kills it and the container exits non-zero (a restart policy such as `unless-stopped` then restarts it). Must be a positive integer; anything else falls back to `900` with a log line. A healthy sync prints at least every 30s. |
+| `OBSIDI_STARTUP_GRACE` | `1800` | Seconds after container start during which the watchdog never fires, so a quiet first full sync is not killed. |
+| `OBSIDI_KILL_GRACE` | `30` | Seconds the watchdog waits after SIGTERM before sending SIGKILL to a hung `ob sync`. |
 
 ### Volumes
 
@@ -94,7 +97,7 @@ The container writes liveness state to `/run/obsidi/` (tmpfs — gone on contain
 
 | File | Purpose |
 |------|---------|
-| `/run/obsidi/heartbeat` | Touched on every stdout line from `ob sync` and every 60s by the poller. The HEALTHCHECK requires mtime ≤ 5 min old. |
+| `/run/obsidi/heartbeat` | Touched only on stdout lines from `ob sync`; the poller never touches it. The stall watchdog reads its age. The HEALTHCHECK requires mtime ≤ 5 min old. |
 | `/run/obsidi/heartbeat.json` | JSON snapshot: `{"ts":"...", "state":"syncing", "remote_vault":"..."}`. Updated every 60s by a background `ob sync-status` call. |
 | `/run/obsidi/unconfigured` | Sentinel created when `/vault` has no sync configuration. Presence makes the HEALTHCHECK report `unhealthy` immediately. |
 
