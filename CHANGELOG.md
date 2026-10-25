@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.1](https://github.com/cameronsjo/obsidi-headless/compare/v2.1.0...v2.1.1) (2026-10-20)
+
+
+### Bug Fixes
+
+* stall watchdog so a hung ob sync restarts the container ([#7](https://github.com/cameronsjo/obsidi-headless/issues/7)) ([31c378d](https://github.com/cameronsjo/obsidi-headless/commit/31c378d220cbe0ddfe59a950d1e61afc5a499070))
+
 ## [2.1.0](https://github.com/cameronsjo/obsidi-headless/compare/v2.0.0...v2.1.0) (2026-06-20)
 
 
