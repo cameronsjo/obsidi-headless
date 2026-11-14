@@ -1,4 +1,4 @@
-FROM node:22-alpine
+FROM node:22.23.5-alpine
 
 ARG OBSIDIAN_HEADLESS_VERSION=0.0.8
 
