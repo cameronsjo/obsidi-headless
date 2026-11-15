@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.2.0](https://github.com/cameronsjo/obsidi-headless/compare/v2.1.1...v2.2.0) (2026-11-15)
+
+
+### Features
+
+* synced stamp on the exact Fully synced line; ctime-preserving ownership preflight ([3310060](https://github.com/cameronsjo/obsidi-headless/commit/33100601b6dc326906cca3ec71af025190d6f64e)), closes [#11](https://github.com/cameronsjo/obsidi-headless/issues/11)
+* synced stamp on the exact Fully synced line; hardened, ctime-preserving start ([22d5d2c](https://github.com/cameronsjo/obsidi-headless/commit/22d5d2c62d8041fdf0c3b69557529d1be05b6f52))
+
+
+### Bug Fixes
+
+* a directory at a marker name does not stop the start ([34d1666](https://github.com/cameronsjo/obsidi-headless/commit/34d166691946f59b30db647d2fc95a95310c8250)), closes [#11](https://github.com/cameronsjo/obsidi-headless/issues/11)
+* **docker:** pin the base to node:22.23.5-alpine ([d2f76a9](https://github.com/cameronsjo/obsidi-headless/commit/d2f76a98e01fd4eb9f887cecef5815a52576d317))
+* **docker:** pin the base to node:22.23.5-alpine ([306611b](https://github.com/cameronsjo/obsidi-headless/commit/306611b4eb55ec9676a9ab795b4e47ec517c366c))
+* root-owned run dir, every per-run file cleared at start, 0600 sync pipe ([9cfb26b](https://github.com/cameronsjo/obsidi-headless/commit/9cfb26b9b7db10fb0715796ed0f04f2ede8efd35)), closes [#11](https://github.com/cameronsjo/obsidi-headless/issues/11)
+
 ## [2.1.1](https://github.com/cameronsjo/obsidi-headless/compare/v2.1.0...v2.1.1) (2026-10-20)
 
 
