@@ -49,5 +49,49 @@ sleep 3
 if [ "$(docker inspect -f '{{.State.Running}}' "$NAME")" = true ]; then pass "second docker start comes up"
 else fail "second docker start exited (rc=$(docker inspect -f '{{.State.ExitCode}}' "$NAME"))"; fi
 
+# Ownership preflight and the synced stamp, in the real image as root:
+# an entry already owned by 99:100 keeps its ctime (chown(2) would bump it),
+# a root-owned entry is fixed, and the stamp appears world-readable for a
+# read-only monitor running as another uid.
+NAME2=obh-stamp-test
+docker rm -f "$NAME2" >/dev/null 2>&1
+# shellcheck disable=SC2016  # expanded inside the container
+docker run -d --name "$NAME2" --entrypoint sh \
+    -e FAKE_OB_MODE=synced -e OBSIDI_POLL_INTERVAL=1 \
+    -e PATH=/fakebin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    "$IMG" -c 'mkdir -p /vault/dir && touch /vault/dir/owned /vault/rootowned \
+        && chown 99:100 /vault /vault/dir /vault/dir/owned \
+        && echo keep > /tmp/victim && chown 99:100 /run/obsidi \
+        && ln -s /tmp/victim /run/obsidi/heartbeat && ln -s /tmp/victim /run/obsidi/heartbeat.json \
+        && mkdir -p /run/obsidi/stalled/sub \
+        && sleep 2 \
+        && stat -c %Z /vault/dir/owned > /tmp/before && exec /entrypoint.sh' >/dev/null \
+    || { echo "FAIL: docker run (stamp)"; exit 1; }
+sleep 6
+before=$(docker exec "$NAME2" cat /tmp/before)
+after=$(docker exec "$NAME2" stat -c %Z /vault/dir/owned)
+owner=$(docker exec "$NAME2" stat -c %u:%g /vault/rootowned)
+mode=$(docker exec "$NAME2" stat -c %a /run/obsidi/synced 2>/dev/null || echo missing)
+if [ -n "$before" ] && [ "$before" = "$after" ]; then pass "correctly owned entry keeps its ctime ($after)"
+else fail "correctly owned entry ctime changed: $before -> $after"; fi
+if [ "$owner" = 99:100 ]; then pass "root-owned entry chowned to 99:100"
+else fail "root-owned entry is $owner"; fi
+if [ "$mode" = 644 ]; then pass "synced stamp present, mode 644"
+else fail "synced stamp mode: $mode"; fi
+# Symlinks planted in the run dir (as uid 99 could when it owned the
+# directory) are removed, not followed: the target keeps its content and owner.
+victim=$(docker exec "$NAME2" sh -c 'cat /tmp/victim; stat -c %u:%g /tmp/victim')
+if [ "$victim" = "keep
+0:0" ]; then pass "planted symlinks are not followed, and a directory at a marker name does not stop the start"
+else fail "planted symlink target changed: $victim"; fi
+rundir=$(docker exec "$NAME2" stat -c %u:%a /run/obsidi)
+pipe=$(docker exec "$NAME2" stat -c %u:%a /run/obsidi/sync.pipe)
+if [ "$rundir" = 0:755 ] && [ "$pipe" = 99:600 ]; then pass "run dir root 0755, pipe uid 99 0600"
+else fail "run dir $rundir, pipe $pipe"; fi
+entry=$(docker exec "$NAME2" stat -c %u:%a /entrypoint.sh)
+if [ "$entry" = 0:755 ]; then pass "entrypoint is root-owned 0755"
+else fail "entrypoint is $entry"; fi
+docker rm -f "$NAME2" >/dev/null 2>&1
+
 [ "$FAILS" -eq 0 ] && echo "ALL PASS" || echo "$FAILS FAILED"
 [ "$FAILS" -eq 0 ]
