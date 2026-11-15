@@ -49,5 +49,32 @@ sleep 3
 if [ "$(docker inspect -f '{{.State.Running}}' "$NAME")" = true ]; then pass "second docker start comes up"
 else fail "second docker start exited (rc=$(docker inspect -f '{{.State.ExitCode}}' "$NAME"))"; fi
 
+# Ownership preflight and the synced stamp, in the real image as root:
+# an entry already owned by 99:100 keeps its ctime (chown(2) would bump it),
+# a root-owned entry is fixed, and the stamp appears world-readable for a
+# read-only monitor running as another uid.
+NAME2=obh-stamp-test
+docker rm -f "$NAME2" >/dev/null 2>&1
+# shellcheck disable=SC2016  # expanded inside the container
+docker run -d --name "$NAME2" --entrypoint sh \
+    -e FAKE_OB_MODE=synced -e OBSIDI_POLL_INTERVAL=1 \
+    -e PATH=/fakebin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    "$IMG" -c 'mkdir -p /vault/dir && touch /vault/dir/owned /vault/rootowned \
+        && chown 99:100 /vault /vault/dir /vault/dir/owned && sleep 2 \
+        && stat -c %Z /vault/dir/owned > /tmp/before && exec /entrypoint.sh' >/dev/null \
+    || { echo "FAIL: docker run (stamp)"; exit 1; }
+sleep 6
+before=$(docker exec "$NAME2" cat /tmp/before)
+after=$(docker exec "$NAME2" stat -c %Z /vault/dir/owned)
+owner=$(docker exec "$NAME2" stat -c %u:%g /vault/rootowned)
+mode=$(docker exec "$NAME2" stat -c %a /run/obsidi/synced 2>/dev/null || echo missing)
+if [ -n "$before" ] && [ "$before" = "$after" ]; then pass "correctly owned entry keeps its ctime ($after)"
+else fail "correctly owned entry ctime changed: $before -> $after"; fi
+if [ "$owner" = 99:100 ]; then pass "root-owned entry chowned to 99:100"
+else fail "root-owned entry is $owner"; fi
+if [ "$mode" = 644 ]; then pass "synced stamp present, mode 644"
+else fail "synced stamp mode: $mode"; fi
+docker rm -f "$NAME2" >/dev/null 2>&1
+
 [ "$FAILS" -eq 0 ] && echo "ALL PASS" || echo "$FAILS FAILED"
 [ "$FAILS" -eq 0 ]

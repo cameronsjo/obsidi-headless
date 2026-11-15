@@ -98,5 +98,43 @@ kill -TERM "$PID" 2>/dev/null; wait "$PID" 2>/dev/null
 if grep -q "OBSIDI_STALL_SECONDS='abc' is not a positive integer; using 900" "$LOG"
 then pass "invalid stall value falls back to 900"; else fail "no fallback log line"; fi
 
+# The `synced` stamp: present only after the exact `Fully synced` line.
+# synced_case <name> <mode> <expect: present|absent> [prestamp]
+synced_case() {
+    if [ "${4:-}" = prestamp ]; then
+        mkdir -p "$TMP/$1.run"; touch "$TMP/$1.run/synced"
+    fi
+    start_case "$1" "$2" 60
+    sleep 4
+    if [ -f "$RUN/synced" ]; then got=present; else got=absent; fi
+    if [ "$got" = "$3" ]; then pass "synced stamp $3 for $1"
+    else fail "synced stamp $got for $1, expected $3"; fi
+    kill -TERM "$PID" 2>/dev/null; wait "$PID" 2>/dev/null
+}
+synced_case synced synced present
+synced_case synced-crlf synced-crlf present
+synced_case connecting connecting absent
+synced_case lookalike lookalike absent
+# A stamp from an earlier run in the same run dir is cleared at start.
+synced_case stale-stamp connecting absent prestamp
+
+# An unconfigured vault clears an earlier run's stamp before the preflight
+# fails, and a fixed configuration clears an earlier run's `unconfigured`.
+RUN="$TMP/unconf.run"; LOG="$TMP/unconf.log"
+mkdir -p "$RUN"; touch "$RUN/synced"
+FAKE_OB_UNCONFIGURED=1 FAKE_OB_MODE=synced OBSIDI_RUN="$RUN" OBSIDI_VAULT="$TMP/vault" \
+    OBSIDI_CONFIG="$TMP/config" PATH="$TMP/bin:$PATH" sh "$ROOT/entrypoint.sh" > "$LOG" 2>&1 &
+PID=$!
+sleep 2
+if [ ! -f "$RUN/synced" ] && [ -f "$RUN/unconfigured" ]; then
+    pass "unconfigured vault: old stamp cleared, unconfigured marker set"
+else fail "unconfigured vault: synced=$([ -f "$RUN/synced" ] && echo y || echo n) unconfigured=$([ -f "$RUN/unconfigured" ] && echo y || echo n)"; fi
+kill -KILL "$PID" 2>/dev/null; wait "$PID" 2>/dev/null
+start_case reconf connecting 60 unconf
+sleep 3
+if [ ! -f "$RUN/unconfigured" ]; then pass "configured restart clears an old unconfigured marker"
+else fail "unconfigured marker survived a configured restart"; fi
+kill -TERM "$PID" 2>/dev/null; wait "$PID" 2>/dev/null
+
 [ "$FAILS" -eq 0 ] && echo "ALL PASS" || echo "$FAILS FAILED"
 [ "$FAILS" -eq 0 ]

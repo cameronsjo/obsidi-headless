@@ -84,7 +84,7 @@ docker run -d \
 | `/config` | obsidian-headless state (credentials, sync metadata) |
 | `/vault` | Your Obsidian vault |
 
-Mount `/run/obsidi` as a `tmpfs` for best practice (it holds only ephemeral state):
+Mount `/run/obsidi` as a `tmpfs` (it holds only ephemeral state), or as a named volume when a read-only monitor in another container needs to read `synced`. Every per-run marker is cleared at start, so a persistent run dir cannot carry an earlier run's state:
 
 ```yaml
 tmpfs:
@@ -93,19 +93,22 @@ tmpfs:
 
 ### Runtime State (`/run/obsidi`)
 
-The container writes liveness state to `/run/obsidi/` (tmpfs — gone on container stop by design).
+The container writes liveness state to `/run/obsidi/`.
 
 | File | Purpose |
 |------|---------|
 | `/run/obsidi/heartbeat` | Touched only on stdout lines from `ob sync`; the poller never touches it. The stall watchdog reads its age. The HEALTHCHECK requires mtime ≤ 5 min old. |
 | `/run/obsidi/heartbeat.json` | JSON snapshot: `{"ts":"...", "state":"syncing", "remote_vault":"..."}`. Updated every 60s by a background `ob sync-status` call. |
-| `/run/obsidi/unconfigured` | Sentinel created when `/vault` has no sync configuration. Presence makes the HEALTHCHECK report `unhealthy` immediately. |
+| `/run/obsidi/synced` | Touched only when `ob sync` prints the exact line `Fully synced` (every 30 s when idle, and after each batch). Removed at start. Its age answers "when did this server last finish a sync"; the heartbeat cannot, because a `Connecting...` / `Disconnected` loop also prints. Mode 0644, so a monitor running as another uid can read it. |
+| `/run/obsidi/unconfigured` | Sentinel created when `/vault` has no sync configuration. Presence makes the HEALTHCHECK report `unhealthy` immediately. Removed at start, and re-created while the vault is still unconfigured. |
 
 External monitors (Gatus, etc.) can check `docker inspect --format '{{.State.Health.Status}}'` or read `heartbeat.json` via a sidecar.
 
 ### User
 
 Runs as UID `99` / GID `100` (matches Unraid's `nobody:users`). Override with `--user` if needed.
+
+At start the entrypoint (as root) changes the owner of every entry under `/vault` and `/config` that is not already `99:100`. Entries that already are stay untouched: `chown` updates an inode's ctime even when the owner does not change, and ctime is the one change signal Obsidian Sync leaves intact (it keeps a note's original mtime).
 
 ### Fail-Loud Behavior
 

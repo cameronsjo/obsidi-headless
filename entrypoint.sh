@@ -1,7 +1,9 @@
 #!/bin/sh
 set -eu
 
-# Runtime state directory (tmpfs — gone on container stop, that's intentional)
+# Runtime state directory. It may be a tmpfs, the container's own layer, or a
+# named volume shared with a read-only monitor, so it can outlive a run: every
+# marker that describes "this run" is cleared below, before anything is judged.
 # Paths are overridable so tests/stall-watchdog.sh can run the supervisor
 # against a fake `ob` in a temp dir; production uses the defaults.
 OBSIDI_RUN="${OBSIDI_RUN:-/run/obsidi}"
@@ -9,6 +11,14 @@ OBSIDI_VAULT="${OBSIDI_VAULT:-/vault}"
 OBSIDI_CONFIG="${OBSIDI_CONFIG:-/config}"
 mkdir -p "$OBSIDI_RUN"
 chown 99:100 "$OBSIDI_RUN"
+
+# $SYNCED is touched only when `ob` prints the exact line `Fully synced`, so its
+# age answers "when did this server last finish a sync with the remote". A
+# stamp left by an earlier run must not vouch for this one, and a stale
+# `unconfigured` marker must not outlive the configuration being fixed (the
+# preflight below re-creates it while the vault is still unconfigured).
+SYNCED="$OBSIDI_RUN/synced"
+rm -f "$SYNCED" "$OBSIDI_RUN/unconfigured"
 
 log() {
     # Structured JSON log to stdout so Docker log drivers capture it cleanly
@@ -22,8 +32,15 @@ log info "obsidian-headless version: $(su-exec 99:100 ob --version 2>/dev/null |
 
 # ---------------------------------------------------------------------------
 # Preflight: fix volume permissions (entrypoint runs as root)
+#
+# Only entries not already owned by 99:100 are changed. chown(2) updates an
+# inode's ctime even when the owner is unchanged, so a blanket `chown -R` at
+# every start marks every note in the vault "changed" to anything that judges
+# backup freshness by ctime (Obsidian Sync keeps a note's original mtime, so
+# ctime is the only reliable change signal).
 # ---------------------------------------------------------------------------
-chown -R 99:100 "$OBSIDI_VAULT" "$OBSIDI_CONFIG"
+find "$OBSIDI_VAULT" "$OBSIDI_CONFIG" \( ! -user 99 -o ! -group 100 \) \
+    -exec chown -h 99:100 {} +
 
 # ---------------------------------------------------------------------------
 # Preflight: verify /vault is configured for Obsidian Sync
@@ -124,13 +141,21 @@ rm -f "$SYNC_PIPE" "$STALLED"
 mkfifo "$SYNC_PIPE"
 chown 99:100 "$SYNC_PIPE"
 
-# Reader: stamp heartbeat on every output line from ob sync.
+# Reader: stamp heartbeat on every output line from ob sync, and $SYNCED only
+# on the exact `Fully synced` line (a trailing CR tolerated). The heartbeat
+# alone cannot tell syncing from a `Connecting...` / `Disconnected` loop, which
+# prints just as often. An exact match, not a substring, so a file named
+# `Fully synced.md` in an upload line cannot stamp it.
 # `stdbuf -oL` is not available on Alpine/busybox; we rely on the fact that
 # ob sync --continuous writes line-buffered output to a tty-ish pipe.
+CR=$(printf '\r')
 (
     while IFS= read -r line; do
         printf '%s\n' "$line"
         touch "$HEARTBEAT"
+        case "${line%"$CR"}" in
+            'Fully synced') touch "$SYNCED" ;;
+        esac
     done < "$SYNC_PIPE"
 ) &
 READER_PID=$!
