@@ -17,12 +17,14 @@ RUN deluser --remove-home node 2>/dev/null || true && \
 RUN apk add --no-cache tini su-exec && \
     npm install -g obsidian-headless@${OBSIDIAN_HEADLESS_VERSION} && \
     npm cache clean --force && \
-    # Pre-create the runtime state directory; Docker tmpfs mounts overlay this
-    # at container start, so the image-level dir is mostly a documentation aid.
-    mkdir -p /run/obsidi && chown 99:100 /run/obsidi
+    # Pre-create the runtime state directory, root-owned (the entrypoint
+    # re-asserts that). A new named volume copies this ownership at first mount.
+    mkdir -p /run/obsidi && chmod 0755 /run/obsidi
 
-COPY --chown=99:100 entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Root-owned: root runs it at every start, so uid 99 (which runs `ob`) must not
+# be able to rewrite it in the container layer.
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod 0755 /entrypoint.sh
 
 COPY --chown=99:100 LICENSE NOTICE.md /licenses/
 

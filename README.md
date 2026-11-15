@@ -93,7 +93,7 @@ tmpfs:
 
 ### Runtime State (`/run/obsidi`)
 
-The container writes liveness state to `/run/obsidi/`.
+The container writes liveness state to `/run/obsidi/`. The directory is root-owned `0755`, and only root writes in it except the sync pipe (`0600`, uid 99), so neither `ob` nor a read-only monitor sharing the directory can redirect or read what the entrypoint writes.
 
 | File | Purpose |
 |------|---------|

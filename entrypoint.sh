@@ -9,8 +9,12 @@ set -eu
 OBSIDI_RUN="${OBSIDI_RUN:-/run/obsidi}"
 OBSIDI_VAULT="${OBSIDI_VAULT:-/vault}"
 OBSIDI_CONFIG="${OBSIDI_CONFIG:-/config}"
+# Root-owned and not writable by uid 99. Only root writes here, except the
+# sync pipe (uid 99's `ob` writes into it): a directory uid 99 could write
+# would let it plant a symlink that root's touch, > and chown below follow.
 mkdir -p "$OBSIDI_RUN"
-chown 99:100 "$OBSIDI_RUN"
+chown 0:0 "$OBSIDI_RUN"
+chmod 0755 "$OBSIDI_RUN"
 
 # $SYNCED is touched only when `ob` prints the exact line `Fully synced`, so its
 # age answers "when did this server last finish a sync with the remote". A
@@ -18,7 +22,11 @@ chown 99:100 "$OBSIDI_RUN"
 # `unconfigured` marker must not outlive the configuration being fixed (the
 # preflight below re-creates it while the vault is still unconfigured).
 SYNCED="$OBSIDI_RUN/synced"
-rm -f "$SYNCED" "$OBSIDI_RUN/unconfigured"
+# Every file this script creates, removed first: rm on a symlink removes the
+# link, so anything an earlier image left (when uid 99 owned the directory)
+# cannot redirect a write.
+rm -f "$SYNCED" "$OBSIDI_RUN/unconfigured" "$OBSIDI_RUN/heartbeat" \
+    "$OBSIDI_RUN/heartbeat.json" "$OBSIDI_RUN/stalled" "$OBSIDI_RUN/sync.pipe"
 
 log() {
     # Structured JSON log to stdout so Docker log drivers capture it cleanly
@@ -104,7 +112,6 @@ START_TS=$(date +%s)
 # Write an initial heartbeat so the healthcheck start-period doesn't see a
 # missing file and immediately fail.
 touch "$HEARTBEAT"
-chown 99:100 "$HEARTBEAT"
 
 write_heartbeat_json() {
     status_out=$(su-exec 99:100 ob sync-status --path "$OBSIDI_VAULT" 2>&1 || true)
@@ -113,7 +120,6 @@ write_heartbeat_json() {
     printf '{"ts":"%s","state":"syncing","remote_vault":"%s"}\n' \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$remote_vault" \
         > "$HEARTBEAT_JSON"
-    chown 99:100 "$HEARTBEAT_JSON"
 }
 
 write_heartbeat_json
@@ -138,7 +144,9 @@ SYNC_PIPE="$OBSIDI_RUN/sync.pipe"
 # previous run's pipe and stall marker so mkfifo cannot fail and the stale
 # marker cannot taint this run.
 rm -f "$SYNC_PIPE" "$STALLED"
-mkfifo "$SYNC_PIPE"
+# 0600 and owned by uid 99: its `ob` writes, root's reader reads, and a monitor
+# sharing the run dir read-only cannot open it and steal lines.
+mkfifo -m 0600 "$SYNC_PIPE"
 chown 99:100 "$SYNC_PIPE"
 
 # Reader: stamp heartbeat on every output line from ob sync, and $SYNCED only
