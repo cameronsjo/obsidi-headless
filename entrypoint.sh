@@ -24,8 +24,9 @@ chmod 0755 "$OBSIDI_RUN"
 SYNCED="$OBSIDI_RUN/synced"
 # Every file this script creates, removed first: rm on a symlink removes the
 # link, so anything an earlier image left (when uid 99 owned the directory)
-# cannot redirect a write.
-rm -f "$SYNCED" "$OBSIDI_RUN/unconfigured" "$OBSIDI_RUN/heartbeat" \
+# cannot redirect a write. -r, so a directory left at one of these names is
+# removed too instead of failing the start under `set -e`.
+rm -rf "$SYNCED" "$OBSIDI_RUN/unconfigured" "$OBSIDI_RUN/heartbeat" \
     "$OBSIDI_RUN/heartbeat.json" "$OBSIDI_RUN/stalled" "$OBSIDI_RUN/sync.pipe"
 
 log() {

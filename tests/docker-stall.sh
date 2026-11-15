@@ -63,6 +63,7 @@ docker run -d --name "$NAME2" --entrypoint sh \
         && chown 99:100 /vault /vault/dir /vault/dir/owned \
         && echo keep > /tmp/victim && chown 99:100 /run/obsidi \
         && ln -s /tmp/victim /run/obsidi/heartbeat && ln -s /tmp/victim /run/obsidi/heartbeat.json \
+        && mkdir -p /run/obsidi/stalled/sub \
         && sleep 2 \
         && stat -c %Z /vault/dir/owned > /tmp/before && exec /entrypoint.sh' >/dev/null \
     || { echo "FAIL: docker run (stamp)"; exit 1; }
@@ -81,7 +82,7 @@ else fail "synced stamp mode: $mode"; fi
 # directory) are removed, not followed: the target keeps its content and owner.
 victim=$(docker exec "$NAME2" sh -c 'cat /tmp/victim; stat -c %u:%g /tmp/victim')
 if [ "$victim" = "keep
-0:0" ]; then pass "planted symlinks in the run dir are not followed"
+0:0" ]; then pass "planted symlinks are not followed, and a directory at a marker name does not stop the start"
 else fail "planted symlink target changed: $victim"; fi
 rundir=$(docker exec "$NAME2" stat -c %u:%a /run/obsidi)
 pipe=$(docker exec "$NAME2" stat -c %u:%a /run/obsidi/sync.pipe)
